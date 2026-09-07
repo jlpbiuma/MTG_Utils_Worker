@@ -1,0 +1,145 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider             = "prisma-client-py"
+  interface            = "asyncio"
+  recursive_type_depth = 5
+}
+
+model Deck {
+  id                  String     @id @default(uuid())
+  userId              String     @map("user_id")
+  name                String
+  format              String     @default("Commander")
+  description         String?
+  commander           String?
+  commanderScryfallId String?    @map("commander_scryfall_id")
+  commanderImageUri   String?    @map("commander_image_uri")
+  createdAt           DateTime   @default(now()) @map("created_at")
+  updatedAt           DateTime   @updatedAt @map("updated_at")
+  cards               DeckCard[]
+
+  @@index([userId])
+  @@map("decks")
+}
+
+model DeckCard {
+  id               String  @id @default(uuid())
+  deckId           String  @map("deck_id")
+  cardScryfallId   String  @map("card_scryfall_id")
+  cardName         String  @map("card_name")
+  quantity         Int     @default(1)
+  assignedQuantity Int     @default(0) @map("assigned_quantity")
+  isSideboard      Boolean @default(false) @map("is_sideboard")
+  isCommander      Boolean @default(false) @map("is_commander")
+  manaCost         String? @map("mana_cost")
+  typeLine         String? @map("type_line")
+  imageUri         String? @map("image_uri")
+  deck             Deck    @relation(fields: [deckId], references: [id], onDelete: Cascade)
+
+  @@unique([deckId, cardScryfallId, isSideboard])
+  @@index([deckId])
+  @@map("deck_cards")
+}
+
+model CollectionCard {
+  id              String   @id @default(uuid())
+  userId          String   @map("user_id")
+  cardScryfallId  String   @map("card_scryfall_id")
+  cardName        String   @map("card_name")
+  quantity        Int      @default(1)
+  setCode         String?  @map("set_code")
+  collectorNumber String?  @map("collector_number")
+  manaCost        String?  @map("mana_cost")
+  typeLine        String?  @map("type_line")
+  imageUri        String?  @map("image_uri")
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([userId, cardScryfallId])
+  @@index([userId])
+  @@map("user_collections")
+}
+
+model CardCatalog {
+  id                    String    @id // Scryfall UUID
+  name                  String    @unique
+  normalizedName        String    @unique @map("normalized_name")
+  manaCost              String?   @map("mana_cost")
+  typeLine              String?   @map("type_line")
+  imageUri              String?   @map("image_uri")
+  setCode               String?   @map("set_code")
+  collectorNumber       String?   @map("collector_number")
+  priceCardmarketTrend  Float?    @map("price_cardmarket_trend")
+  priceCardmarketMin    Float?    @map("price_cardmarket_min")
+  priceCardmarketMax    Float?    @map("price_cardmarket_max")
+  priceCardTraderTrend  Float?    @map("price_cardtrader_trend")
+  priceCardTraderMin    Float?    @map("price_cardtrader_min")
+  priceCardTraderMax    Float?    @map("price_cardtrader_max")
+  priceGoldfishTrend    Float?    @map("price_goldfish_trend")
+  priceGoldfishMin      Float?    @map("price_goldfish_min")
+  priceGoldfishMax      Float?    @map("price_goldfish_max")
+  pricesUpdatedAt       DateTime? @map("prices_updated_at")
+  updatedAt             DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@map("card_catalog")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String?
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+model CardSet {
+  id           String         @id
+  code         String         @unique
+  name         String
+  setType      String         @map("set_type")
+  cardCount    Int            @default(0) @map("card_count")
+  releasedAt   DateTime?      @map("released_at")
+  iconSvgUri   String?        @map("icon_svg_uri")
+  searchUri    String         @map("search_uri")
+  isDigital    Boolean        @default(false) @map("is_digital")
+  isDownloaded Boolean        @default(false) @map("is_downloaded")
+  downloadedAt DateTime?      @map("downloaded_at")
+  createdAt    DateTime       @default(now()) @map("created_at")
+  updatedAt    DateTime       @updatedAt @map("updated_at")
+  printings    CardPrinting[]
+
+  @@map("card_sets")
+}
+
+model CardPrinting {
+  id              String    @id
+  cardName        String    @map("card_name")
+  normalizedName  String    @map("normalized_name")
+  setCode         String    @map("set_code")
+  collectorNumber String    @map("collector_number")
+  manaCost        String?   @map("mana_cost")
+  typeLine        String?   @map("type_line")
+  rarity          String?
+  imageUri        String?   @map("image_uri")
+  imageUriSmall   String?   @map("image_uri_small")
+  priceEur        Float?    @map("price_eur")
+  priceEurFoil    Float?    @map("price_eur_foil")
+  priceUsd        Float?    @map("price_usd")
+  priceUsdFoil    Float?    @map("price_usd_foil")
+  releasedAt      DateTime? @map("released_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  set             CardSet   @relation(fields: [setCode], references: [code], onDelete: Cascade)
+
+  @@unique([setCode, collectorNumber])
+  @@index([normalizedName])
+  @@index([setCode])
+  @@map("card_printings")
+}
