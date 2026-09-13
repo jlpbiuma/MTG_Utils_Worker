@@ -75,8 +75,8 @@ def test_extract_image_uris():
         }
     }
     images = ScryfallClient.extract_image_uris(card_single)
-    assert images["image_uri"] == "https://cards.scryfall.io/normal/1.jpg"
-    assert images["image_uri_small"] == "https://cards.scryfall.io/small/1.jpg"
+    assert images["normal"] == "https://cards.scryfall.io/normal/1.jpg"
+    assert images["small"] == "https://cards.scryfall.io/small/1.jpg"
 
     # Double-faced card
     card_dfc = {
@@ -97,11 +97,46 @@ def test_extract_image_uris():
         ]
     }
     images_dfc = ScryfallClient.extract_image_uris(card_dfc)
-    assert images_dfc["image_uri"] == "https://cards.scryfall.io/normal/front.jpg"
-    assert images_dfc["image_uri_small"] == "https://cards.scryfall.io/small/front.jpg"
+    assert images_dfc["normal"] == "https://cards.scryfall.io/normal/front.jpg"
+    assert images_dfc["small"] == "https://cards.scryfall.io/small/front.jpg"
 
     # Card without images
-    assert ScryfallClient.extract_image_uris({}) == {"image_uri": None, "image_uri_small": None}
+    assert ScryfallClient.extract_image_uris({}) == {
+        "normal": None,
+        "small": None,
+        "large": None,
+        "png": None,
+    }
+
+
+def test_extract_spanish_rules_text_only_uses_official_spanish_printing():
+    assert ScryfallClient.extract_spanish_rules_text({
+        "lang": "es", "printed_text": "El Relámpago hace 3 puntos de daño a cualquier objetivo."
+    }) == "El Relámpago hace 3 puntos de daño a cualquier objetivo."
+    assert ScryfallClient.extract_spanish_rules_text({
+        "lang": "en", "printed_text": "Lightning Bolt deals 3 damage to any target."
+    }) is None
+    assert ScryfallClient.extract_spanish_rules_text({
+        "lang": "es",
+        "card_faces": [{"printed_text": "Cara uno."}, {"printed_text": "Cara dos."}],
+    }) == "Cara uno.\n//\nCara dos."
+
+
+def test_extract_full_rules_text_includes_every_card_face():
+    card = {"card_faces": [
+        {"oracle_text": "Elige uno —\n• Roba una carta."},
+        {"oracle_text": "Añade {G}."},
+    ]}
+    assert ScryfallClient.extract_full_rules_text(card) == "Elige uno —\n• Roba una carta.\n//\nAñade {G}."
+
+
+def test_spanish_search_uri_preserves_set_query_and_filters_spanish():
+    uri = ScryfallClient.spanish_search_uri(
+        "https://api.scryfall.test/cards/search?include_extras=true&order=set&q=e%3Asos&unique=prints"
+    )
+
+    assert "include_extras=true" in uri
+    assert "q=e%3Asos+lang%3Aes" in uri
 
 def test_parse_float_price():
     assert ScryfallClient.parse_float_price("1.25") == 1.25

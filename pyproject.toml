@@ -1,12 +1,13 @@
 [project]
-name = "set-worker"
+name = "worker"
 version = "0.1.0"
 description = "MTG Utils Background Scryfall Sets and Cards Sync Worker"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.110.0",
-    "httpx>=0.27.0",
+    "httpx[socks]>=0.27.0",
+    "miniopy-async>=1.21,<2",
     "prisma>=0.15.0",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.2.0",

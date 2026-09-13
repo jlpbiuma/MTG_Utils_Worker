@@ -1,0 +1,63 @@
+{
+  "label": "after",
+  "mode": "live",
+  "scenario": "burst",
+  "route": "direct",
+  "requested": 4,
+  "completed": 4,
+  "http_requests": 4,
+  "http_429": 0,
+  "elapsed_seconds": 5.351,
+  "results": [
+    {
+      "name": "Lightning Bolt",
+      "ok": true,
+      "returned": [
+        "Lightning Bolt"
+      ],
+      "seconds": 0.299
+    },
+    {
+      "name": "Sol Ring",
+      "ok": true,
+      "returned": [
+        "Sol Ring"
+      ],
+      "seconds": 0.373
+    },
+    {
+      "name": "Counterspell",
+      "ok": true,
+      "returned": [
+        "Counterspell"
+      ],
+      "seconds": 0.291
+    },
+    {
+      "name": "Swords to Plowshares",
+      "ok": true,
+      "returned": [
+        "Swords to Plowshares"
+      ],
+      "seconds": 0.385
+    }
+  ],
+  "events": [
+    {
+      "at": 0.299,
+      "status": 200
+    },
+    {
+      "at": 1.673,
+      "status": 200
+    },
+    {
+      "at": 2.965,
+      "status": 200
+    },
+    {
+      "at": 4.35,
+      "status": 200
+    }
+  ]
+}

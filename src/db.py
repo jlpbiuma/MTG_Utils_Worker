@@ -1,7 +1,7 @@
 import logging
 from prisma import Prisma
 
-logger = logging.getLogger("mtg_set_worker.db")
+logger = logging.getLogger("mtg_worker.db")
 
 db = Prisma(auto_register=True)
 

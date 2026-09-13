@@ -1,0 +1,156 @@
+{
+  "label": "before",
+  "mode": "simulated",
+  "scenario": "burst",
+  "extends_cooldown_on_rejected_request": false,
+  "route": "mock Tor",
+  "requested": 4,
+  "completed": 4,
+  "http_requests": 27,
+  "http_429": 23,
+  "elapsed_seconds": 110.642,
+  "results": [
+    {
+      "name": "Lightning Bolt",
+      "ok": true,
+      "returned": [
+        "Lightning Bolt"
+      ],
+      "seconds": 0.007
+    },
+    {
+      "name": "Sol Ring",
+      "ok": true,
+      "returned": [
+        "Sol Ring"
+      ],
+      "seconds": 30.285
+    },
+    {
+      "name": "Counterspell",
+      "ok": true,
+      "returned": [
+        "Counterspell"
+      ],
+      "seconds": 72.485
+    },
+    {
+      "name": "Swords to Plowshares",
+      "ok": true,
+      "returned": [
+        "Swords to Plowshares"
+      ],
+      "seconds": 110.616
+    }
+  ],
+  "events": [
+    {
+      "at": 0.004,
+      "status": 200
+    },
+    {
+      "at": 0.011,
+      "status": 429
+    },
+    {
+      "at": 0.016,
+      "status": 429
+    },
+    {
+      "at": 0.019,
+      "status": 429
+    },
+    {
+      "at": 2.069,
+      "status": 429
+    },
+    {
+      "at": 2.082,
+      "status": 429
+    },
+    {
+      "at": 2.085,
+      "status": 429
+    },
+    {
+      "at": 6.14,
+      "status": 429
+    },
+    {
+      "at": 6.153,
+      "status": 429
+    },
+    {
+      "at": 6.158,
+      "status": 429
+    },
+    {
+      "at": 12.17,
+      "status": 429
+    },
+    {
+      "at": 12.193,
+      "status": 429
+    },
+    {
+      "at": 12.206,
+      "status": 429
+    },
+    {
+      "at": 20.216,
+      "status": 429
+    },
+    {
+      "at": 20.236,
+      "status": 429
+    },
+    {
+      "at": 20.259,
+      "status": 429
+    },
+    {
+      "at": 30.278,
+      "status": 200
+    },
+    {
+      "at": 30.297,
+      "status": 429
+    },
+    {
+      "at": 30.367,
+      "status": 429
+    },
+    {
+      "at": 42.414,
+      "status": 429
+    },
+    {
+      "at": 42.425,
+      "status": 429
+    },
+    {
+      "at": 56.47,
+      "status": 429
+    },
+    {
+      "at": 56.478,
+      "status": 429
+    },
+    {
+      "at": 72.491,
+      "status": 200
+    },
+    {
+      "at": 72.501,
+      "status": 429
+    },
+    {
+      "at": 90.566,
+      "status": 429
+    },
+    {
+      "at": 110.627,
+      "status": 200
+    }
+  ]
+}

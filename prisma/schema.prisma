@@ -38,6 +38,7 @@ model DeckCard {
   manaCost         String? @map("mana_cost")
   typeLine         String? @map("type_line")
   imageUri         String? @map("image_uri")
+  setCode          String? @map("set_code")
   deck             Deck    @relation(fields: [deckId], references: [id], onDelete: Cascade)
 
   @@unique([deckId, cardScryfallId, isSideboard])
@@ -50,6 +51,8 @@ model CollectionCard {
   userId          String   @map("user_id")
   cardScryfallId  String   @map("card_scryfall_id")
   cardName        String   @map("card_name")
+  isFoil Boolean @default(false) @map("is_foil")
+  enrichmentKey String? @map("enrichment_key")
   quantity        Int      @default(1)
   setCode         String?  @map("set_code")
   collectorNumber String?  @map("collector_number")
@@ -58,31 +61,30 @@ model CollectionCard {
   imageUri        String?  @map("image_uri")
   updatedAt       DateTime @default(now()) @updatedAt @map("updated_at")
 
-  @@unique([userId, cardScryfallId])
+  @@unique([userId, cardScryfallId, isFoil], name: "userId_cardScryfallId")
+  @@index([enrichmentKey])
   @@index([userId])
   @@map("user_collections")
 }
 
 model CardCatalog {
-  id                    String    @id // Scryfall UUID
-  name                  String    @unique
-  normalizedName        String    @unique @map("normalized_name")
-  manaCost              String?   @map("mana_cost")
-  typeLine              String?   @map("type_line")
-  imageUri              String?   @map("image_uri")
-  setCode               String?   @map("set_code")
-  collectorNumber       String?   @map("collector_number")
-  priceCardmarketTrend  Float?    @map("price_cardmarket_trend")
-  priceCardmarketMin    Float?    @map("price_cardmarket_min")
-  priceCardmarketMax    Float?    @map("price_cardmarket_max")
-  priceCardTraderTrend  Float?    @map("price_cardtrader_trend")
-  priceCardTraderMin    Float?    @map("price_cardtrader_min")
-  priceCardTraderMax    Float?    @map("price_cardtrader_max")
-  priceGoldfishTrend    Float?    @map("price_goldfish_trend")
-  priceGoldfishMin      Float?    @map("price_goldfish_min")
-  priceGoldfishMax      Float?    @map("price_goldfish_max")
-  pricesUpdatedAt       DateTime? @map("prices_updated_at")
-  updatedAt             DateTime  @default(now()) @updatedAt @map("updated_at")
+  id               String    @id // Scryfall UUID
+  name             String    @unique
+  normalizedName   String    @unique @map("normalized_name")
+  manaCost         String?   @map("mana_cost")
+  typeLine         String?   @map("type_line")
+  oracleTextEs     String?   @map("oracle_text_es") @db.Text
+  nameEs           String?   @map("name_es")
+  typeLineEs       String?   @map("type_line_es")
+  flavorTextEs     String?   @map("flavor_text_es") @db.Text
+  detailsEs        Json?     @map("details_es")
+  detailsUpdatedAt DateTime? @map("details_updated_at")
+  imageUri         String?   @map("image_uri")
+  setCode          String?   @map("set_code")
+  collectorNumber  String?   @map("collector_number")
+  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  printings CardPrinting[]
 
   @@map("card_catalog")
 }
@@ -110,6 +112,8 @@ model CardSet {
   isDigital    Boolean        @default(false) @map("is_digital")
   isDownloaded Boolean        @default(false) @map("is_downloaded")
   downloadedAt DateTime?      @map("downloaded_at")
+  downloadAttempts Int        @default(0) @map("download_attempts")
+  lastAttemptAt DateTime?     @map("last_attempt_at")
   createdAt    DateTime       @default(now()) @map("created_at")
   updatedAt    DateTime       @updatedAt @map("updated_at")
   printings    CardPrinting[]
@@ -118,28 +122,199 @@ model CardSet {
 }
 
 model CardPrinting {
-  id              String    @id
-  cardName        String    @map("card_name")
-  normalizedName  String    @map("normalized_name")
-  setCode         String    @map("set_code")
-  collectorNumber String    @map("collector_number")
-  manaCost        String?   @map("mana_cost")
-  typeLine        String?   @map("type_line")
-  rarity          String?
-  imageUri        String?   @map("image_uri")
-  imageUriSmall   String?   @map("image_uri_small")
-  priceEur        Float?    @map("price_eur")
-  priceEurFoil    Float?    @map("price_eur_foil")
-  priceUsd        Float?    @map("price_usd")
-  priceUsdFoil    Float?    @map("price_usd_foil")
-  releasedAt      DateTime? @map("released_at")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
+  id                   String    @id
+  catalogId            String?   @map("catalog_id")
+  setId                String    @map("set_id")
+  collectorNumber      String    @map("collector_number")
+  rarity               String?
+  imageUri             String?   @map("image_uri")
+  imageUriSmall        String?   @map("image_uri_small")
+  imageUriLarge        String?   @map("image_uri_large")
+  priceEur             Float?    @map("price_eur")
+  priceEurFoil         Float?    @map("price_eur_foil")
+  priceUsd             Float?    @map("price_usd")
+  priceUsdFoil         Float?    @map("price_usd_foil")
+  priceCardmarketTrend Float?    @map("price_cardmarket_trend")
+  priceCardmarketMin   Float?    @map("price_cardmarket_min")
+  priceCardmarketMax   Float?    @map("price_cardmarket_max")
+  priceCardtraderTrend Float?    @map("price_cardtrader_trend")
+  priceCardtraderMin   Float?    @map("price_cardtrader_min")
+  priceCardtraderMax   Float?    @map("price_cardtrader_max")
+  pricesUpdatedAt      DateTime? @map("prices_updated_at")
+  releasedAt           DateTime? @map("released_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
 
-  set             CardSet   @relation(fields: [setCode], references: [code], onDelete: Cascade)
+  catalog          CardCatalog?          @relation(fields: [catalogId], references: [id], onDelete: SetNull)
+  set              CardSet               @relation(fields: [setId], references: [id], onDelete: Cascade)
+  priceHistory     CardPriceHistory[]
+  translationRetry CardTranslationRetry?
 
-  @@unique([setCode, collectorNumber])
-  @@index([normalizedName])
-  @@index([setCode])
+  @@unique([setId, collectorNumber])
+  @@index([catalogId])
+  @@index([setId])
   @@map("card_printings")
+}
+
+// Sparse time series: consumers use the most recent row at or before a date.
+// A row is inserted only for an initial value or a movement greater than 2.5%.
+model CardPriceHistory {
+  id             String       @id @default(uuid())
+  cardPrintingId String       @map("card_printing_id")
+  provider       String       @default("cardmarket")
+  currency       String       @default("EUR")
+  trendPrice     Float?       @map("trend_price")
+  minPrice       Float?       @map("min_price")
+  maxPrice       Float?       @map("max_price")
+  priceEur       Float?       @map("price_eur")
+  priceEurFoil   Float?       @map("price_eur_foil")
+  priceUsd       Float?       @map("price_usd")
+  priceUsdFoil   Float?       @map("price_usd_foil")
+  recordedAt     DateTime     @default(now()) @map("recorded_at")
+  cardPrinting   CardPrinting @relation(fields: [cardPrintingId], references: [id], onDelete: Cascade)
+
+  @@index([cardPrintingId, provider, recordedAt])
+  @@map("card_price_history")
+}
+
+// Internal scheduling state only. It is deleted after a Spanish printing is
+// found or after the third weekly retry; no untranslated flag is exposed.
+model CardTranslationRetry {
+  cardPrintingId String       @id @map("card_printing_id")
+  attempts       Int          @default(0)
+  nextAttemptAt  DateTime     @map("next_attempt_at")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  cardPrinting   CardPrinting @relation(fields: [cardPrintingId], references: [id], onDelete: Cascade)
+
+  @@index([nextAttemptAt])
+  @@map("card_translation_retries")
+}
+
+model RuleDocument {
+  id            String    @id @default(uuid())
+  source        String
+  format        String    @default("txt")
+  url           String
+  effectiveDate DateTime? @map("effective_date")
+  etag          String?
+  lastModified  String?   @map("last_modified")
+  sha256        String
+  content       String    @db.Text
+  fetchedAt     DateTime  @default(now()) @map("fetched_at")
+
+  @@unique([source, sha256])
+  @@index([source, fetchedAt])
+  @@map("rule_documents")
+}
+
+model RuleDocumentChange {
+  id                 String  @id @default(uuid())
+  previousDocumentId String? @map("previous_document_id")
+  documentId         String  @map("document_id")
+  ruleNumber         String  @map("rule_number")
+  changeType         String  @map("change_type")
+  oldText            String? @map("old_text") @db.Text
+  newText            String? @map("new_text") @db.Text
+
+  @@unique([documentId, ruleNumber])
+  @@index([ruleNumber])
+  @@map("rule_document_changes")
+}
+
+model CardRuling {
+  id             String   @id @default(uuid())
+  oracleId       String   @map("oracle_id")
+  scryfallCardId String   @map("scryfall_card_id")
+  source         String
+  rulingDate     DateTime @map("ruling_date")
+  text           String   @db.Text
+  textHash       String   @map("text_hash")
+  firstSeenAt    DateTime @default(now()) @map("first_seen_at")
+  lastSeenAt     DateTime @default(now()) @map("last_seen_at")
+
+  @@unique([oracleId, textHash])
+  @@map("card_rulings")
+}
+
+model RulingCardSync {
+  scryfallCardId String   @id @map("scryfall_card_id")
+  oracleId       String?  @map("oracle_id")
+  lastCheckedAt  DateTime @default(now()) @map("last_checked_at")
+
+  @@index([lastCheckedAt])
+  @@map("ruling_card_sync")
+}
+
+model RulesSyncState {
+  id                     String    @id @default("rules")
+  rulingsCursor          String?   @map("rulings_cursor")
+  lastRulesCheckAt       DateTime? @map("last_rules_check_at")
+  lastRulingsFullCycleAt DateTime? @map("last_rulings_full_cycle_at")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+
+  @@map("rules_sync_state")
+}
+
+model CollectionImport {
+  id String @id
+  userId String @map("user_id")
+  requestKey String @map("request_key")
+  payloadHash String @map("payload_hash")
+  importedCount Int @map("imported_count")
+  uniqueCards Int @map("unique_cards")
+  createdAt DateTime @default(now()) @map("created_at")
+  @@unique([userId, requestKey])
+  @@map("collection_imports")
+}
+
+model CollectionImportItem {
+  importId String @map("import_id")
+  jobKey String @map("job_key")
+  @@id([importId, jobKey])
+  @@map("collection_import_items")
+}
+
+model EnrichmentJob {
+  key String @id
+  identifier Json
+  status String @default("queued")
+  phase String @default("resolve")
+  card Json?
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now()) @map("next_attempt_at")
+  leaseUntil DateTime? @map("lease_until")
+  leaseToken String? @map("lease_token")
+  lastError String? @map("last_error")
+  updatedAt DateTime @default(now()) @map("updated_at")
+  @@index([status, nextAttemptAt])
+  @@map("enrichment_jobs")
+}
+
+model ScryfallBulkCard {
+  generation String
+  id String
+  nameKey String @map("name_key")
+  setCode String @map("set_code")
+  collectorNumber String @map("collector_number")
+  lang String
+  oracleId String? @map("oracle_id")
+  payload Json
+  @@id([generation, id])
+  @@index([generation, nameKey, lang])
+  @@index([generation, oracleId])
+  @@index([generation, setCode, collectorNumber, lang])
+  @@map("scryfall_bulk_cards")
+}
+
+model ScryfallBulkState {
+  kind String @id
+  generation String?
+  sourceType String? @map("source_type")
+  sourceUpdatedAt String? @map("source_updated_at")
+  leaseUntil DateTime? @map("lease_until")
+  leaseToken String? @map("lease_token")
+  lastError String? @map("last_error")
+  updatedAt DateTime @default(now()) @map("updated_at")
+  @@map("scryfall_bulk_state")
 }

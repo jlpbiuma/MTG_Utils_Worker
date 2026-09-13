@@ -1,0 +1,126 @@
+[
+  {
+    "label": "current_success_5000",
+    "unique_names": 5000,
+    "uploads": 1,
+    "streaming": false,
+    "coalesced": false,
+    "fail_collection_call": null,
+    "stored_unique": 5000,
+    "pending_unique": 0,
+    "counts": {
+      "collection_http": 67,
+      "spanish_http": 5000,
+      "rulings_http": 5000,
+      "image_store_calls": 5000,
+      "catalog_upserts": 5000
+    },
+    "task_exceptions": [],
+    "reported_downloaded": 5000,
+    "reported_errors": 0
+  },
+  {
+    "label": "current_failure_last_batch",
+    "unique_names": 5000,
+    "uploads": 1,
+    "streaming": false,
+    "coalesced": false,
+    "fail_collection_call": 67,
+    "stored_unique": 0,
+    "pending_unique": 5000,
+    "counts": {
+      "collection_http": 67,
+      "spanish_http": 0,
+      "rulings_http": 0,
+      "image_store_calls": 0,
+      "catalog_upserts": 0
+    },
+    "task_exceptions": [
+      429
+    ],
+    "reported_downloaded": 0,
+    "reported_errors": 0
+  },
+  {
+    "label": "streaming_failure_last_batch",
+    "unique_names": 5000,
+    "uploads": 1,
+    "streaming": true,
+    "coalesced": false,
+    "fail_collection_call": 67,
+    "stored_unique": 4950,
+    "pending_unique": 50,
+    "counts": {
+      "collection_http": 67,
+      "spanish_http": 4950,
+      "rulings_http": 4950,
+      "image_store_calls": 4950,
+      "catalog_upserts": 4950
+    },
+    "task_exceptions": [
+      429
+    ],
+    "reported_downloaded": 4950,
+    "reported_errors": 0
+  },
+  {
+    "label": "current_two_overlapping_uploads",
+    "unique_names": 1000,
+    "uploads": 2,
+    "streaming": false,
+    "coalesced": false,
+    "fail_collection_call": null,
+    "stored_unique": 1000,
+    "pending_unique": 0,
+    "counts": {
+      "collection_http": 28,
+      "spanish_http": 2000,
+      "rulings_http": 2000,
+      "image_store_calls": 2000,
+      "catalog_upserts": 2000
+    },
+    "task_exceptions": [],
+    "reported_downloaded": 2000,
+    "reported_errors": 0
+  },
+  {
+    "label": "coalesced_two_overlapping_uploads",
+    "unique_names": 1000,
+    "uploads": 2,
+    "streaming": false,
+    "coalesced": true,
+    "fail_collection_call": null,
+    "stored_unique": 1000,
+    "pending_unique": 0,
+    "counts": {
+      "collection_http": 14,
+      "spanish_http": 1000,
+      "rulings_http": 1000,
+      "image_store_calls": 1000,
+      "catalog_upserts": 1000
+    },
+    "task_exceptions": [],
+    "reported_downloaded": 1000,
+    "reported_errors": 0
+  },
+  {
+    "label": "current_one_name_not_found",
+    "unique_names": 5000,
+    "uploads": 1,
+    "streaming": false,
+    "coalesced": false,
+    "fail_collection_call": null,
+    "stored_unique": 4999,
+    "pending_unique": 1,
+    "counts": {
+      "collection_http": 67,
+      "spanish_http": 4999,
+      "rulings_http": 4999,
+      "image_store_calls": 4999,
+      "catalog_upserts": 4999
+    },
+    "task_exceptions": [],
+    "reported_downloaded": 4999,
+    "reported_errors": 0
+  }
+]

@@ -1,0 +1,204 @@
+{
+  "label": "before",
+  "mode": "simulated",
+  "scenario": "retry-after",
+  "extends_cooldown_on_rejected_request": false,
+  "route": "mock Tor",
+  "requested": 4,
+  "completed": 2,
+  "http_requests": 40,
+  "http_429": 38,
+  "elapsed_seconds": 112.321,
+  "results": [
+    {
+      "name": "Lightning Bolt",
+      "ok": true,
+      "returned": [
+        "Lightning Bolt"
+      ],
+      "seconds": 57.884
+    },
+    {
+      "name": "Sol Ring",
+      "ok": true,
+      "returned": [
+        "Sol Ring"
+      ],
+      "seconds": 92.198
+    },
+    {
+      "name": "Counterspell",
+      "ok": false,
+      "error": "HTTPStatusError",
+      "seconds": 112.285
+    },
+    {
+      "name": "Swords to Plowshares",
+      "ok": false,
+      "error": "HTTPStatusError",
+      "seconds": 112.288
+    }
+  ],
+  "events": [
+    {
+      "at": 0.007,
+      "status": 429
+    },
+    {
+      "at": 0.019,
+      "status": 429
+    },
+    {
+      "at": 0.023,
+      "status": 429
+    },
+    {
+      "at": 0.026,
+      "status": 429
+    },
+    {
+      "at": 2.029,
+      "status": 429
+    },
+    {
+      "at": 2.039,
+      "status": 429
+    },
+    {
+      "at": 2.045,
+      "status": 429
+    },
+    {
+      "at": 2.052,
+      "status": 429
+    },
+    {
+      "at": 6.096,
+      "status": 429
+    },
+    {
+      "at": 6.14,
+      "status": 429
+    },
+    {
+      "at": 6.146,
+      "status": 429
+    },
+    {
+      "at": 6.149,
+      "status": 429
+    },
+    {
+      "at": 12.212,
+      "status": 429
+    },
+    {
+      "at": 12.239,
+      "status": 429
+    },
+    {
+      "at": 12.255,
+      "status": 429
+    },
+    {
+      "at": 12.265,
+      "status": 429
+    },
+    {
+      "at": 20.309,
+      "status": 429
+    },
+    {
+      "at": 20.346,
+      "status": 429
+    },
+    {
+      "at": 20.361,
+      "status": 429
+    },
+    {
+      "at": 20.37,
+      "status": 429
+    },
+    {
+      "at": 31.605,
+      "status": 429
+    },
+    {
+      "at": 31.683,
+      "status": 429
+    },
+    {
+      "at": 31.687,
+      "status": 429
+    },
+    {
+      "at": 31.69,
+      "status": 429
+    },
+    {
+      "at": 43.715,
+      "status": 429
+    },
+    {
+      "at": 43.896,
+      "status": 429
+    },
+    {
+      "at": 44.016,
+      "status": 429
+    },
+    {
+      "at": 44.02,
+      "status": 429
+    },
+    {
+      "at": 57.876,
+      "status": 200
+    },
+    {
+      "at": 58.035,
+      "status": 429
+    },
+    {
+      "at": 58.058,
+      "status": 429
+    },
+    {
+      "at": 58.076,
+      "status": 429
+    },
+    {
+      "at": 74.111,
+      "status": 429
+    },
+    {
+      "at": 74.158,
+      "status": 429
+    },
+    {
+      "at": 74.171,
+      "status": 429
+    },
+    {
+      "at": 92.201,
+      "status": 200
+    },
+    {
+      "at": 92.218,
+      "status": 429
+    },
+    {
+      "at": 92.228,
+      "status": 429
+    },
+    {
+      "at": 112.289,
+      "status": 429
+    },
+    {
+      "at": 112.309,
+      "status": 429
+    }
+  ]
+}

@@ -22,6 +22,6 @@ RUN uv run prisma generate
 
 COPY src ./src
 
-EXPOSE 8002
+EXPOSE 8001
 
-CMD ["uv", "run", "python", "-m", "src.main"]
+CMD ["sh", "-c", "uv run prisma generate && exec uv run python -m src.main"]
