@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     IMGPROXY_SALT: str = os.getenv("IMGPROXY_SALT", "")
     IMAGE_BACKFILL_PER_CYCLE: int = int(os.getenv("IMAGE_BACKFILL_PER_CYCLE", "25"))
     IMAGE_DOWNLOAD_CONCURRENCY: int = int(os.getenv("IMAGE_DOWNLOAD_CONCURRENCY", "6"))
+    ENRICH_CONCURRENCY: int = int(os.getenv("ENRICH_CONCURRENCY", "4"))
     PRICE_SYNC_INTERVAL_DAYS: int = int(os.getenv("PRICE_SYNC_INTERVAL_DAYS", "7"))
     PRICE_SYNC_BATCH_SIZE: int = int(os.getenv("PRICE_SYNC_BATCH_SIZE", "75"))
     PRICE_CHANGE_THRESHOLD: float = float(os.getenv("PRICE_CHANGE_THRESHOLD", "0.025"))

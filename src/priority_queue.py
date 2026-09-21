@@ -8,6 +8,7 @@ import time
 import uuid
 
 from src.services.scryfall_transport import request
+from src.config import settings
 from src.services.scryfall import ScryfallClient
 from src.services.card_utils import is_playable_card
 from src.worker import Worker
@@ -227,10 +228,10 @@ async def claim(db,token):
         SELECT j.key FROM enrichment_jobs j JOIN eligible e ON e.key=j.key
         WHERE j.phase=(SELECT phase FROM batch_phase)
         ORDER BY j.next_attempt_at,j.key
-        LIMIT (SELECT CASE WHEN phase='resolve' THEN 75 ELSE 1 END FROM batch_phase)
+        LIMIT (SELECT CASE WHEN phase='resolve' THEN 75 ELSE $2 END FROM batch_phase)
         FOR UPDATE OF j SKIP LOCKED
     ) UPDATE enrichment_jobs j SET status='running',attempts=attempts+1,lease_token=$1,lease_until=NOW()+INTERVAL '120 seconds'
-      FROM picked WHERE j.key=picked.key RETURNING j.*""",token)
+      FROM picked WHERE j.key=picked.key RETURNING j.*""",token,settings.ENRICH_CONCURRENCY)
 
 
 
@@ -263,9 +264,9 @@ async def consume(db):
                 resolves = [j for j in jobs if j['phase']=='resolve']
                 if resolves:
                     await resolve_batch(db,resolves,worker.scryfall)
-                for job in jobs:
-                    if job['phase']=='enrich':
-                        await enrich_one(db,job,worker)
+                enriches = [j for j in jobs if j['phase']=='enrich']
+                if enriches:
+                    await asyncio.gather(*(enrich_one(db,job,worker) for job in enriches))
                 return bool(jobs)
             beat,work = asyncio.create_task(heartbeat()),asyncio.create_task(process())
             try:
