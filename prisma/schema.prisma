@@ -18,6 +18,8 @@ model Deck {
   commander           String?
   commanderScryfallId String?    @map("commander_scryfall_id")
   commanderImageUri   String?    @map("commander_image_uri")
+  isArchived          Boolean    @default(false) @map("is_archived")
+  tags                String?    @default("") @map("tags")
   createdAt           DateTime   @default(now()) @map("created_at")
   updatedAt           DateTime   @updatedAt @map("updated_at")
   cards               DeckCard[]
@@ -39,10 +41,12 @@ model DeckCard {
   typeLine         String? @map("type_line")
   imageUri         String? @map("image_uri")
   setCode          String? @map("set_code")
+  tags             String? @default("") @map("tags")
   deck             Deck    @relation(fields: [deckId], references: [id], onDelete: Cascade)
 
   @@unique([deckId, cardScryfallId, isSideboard])
   @@index([deckId])
+  @@index([cardScryfallId])
   @@map("deck_cards")
 }
 
@@ -64,7 +68,26 @@ model CollectionCard {
   @@unique([userId, cardScryfallId, isFoil], name: "userId_cardScryfallId")
   @@index([enrichmentKey])
   @@index([userId])
+  @@index([userId, cardName])
   @@map("user_collections")
+}
+
+model WantCard {
+  id              String   @id @default(uuid())
+  userId          String   @map("user_id")
+  cardScryfallId  String   @map("card_scryfall_id")
+  cardName        String   @map("card_name")
+  quantity        Int      @default(1)
+  setCode         String?  @map("set_code")
+  collectorNumber String?  @map("collector_number")
+  manaCost        String?  @map("mana_cost")
+  typeLine        String?  @map("type_line")
+  imageUri        String?  @map("image_uri")
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([userId, cardScryfallId], name: "userId_cardScryfallId_want")
+  @@index([userId])
+  @@map("user_wants")
 }
 
 model CardCatalog {
@@ -86,6 +109,7 @@ model CardCatalog {
 
   printings CardPrinting[]
 
+  @@index([updatedAt])
   @@map("card_catalog")
 }
 
@@ -137,9 +161,6 @@ model CardPrinting {
   priceCardmarketTrend Float?    @map("price_cardmarket_trend")
   priceCardmarketMin   Float?    @map("price_cardmarket_min")
   priceCardmarketMax   Float?    @map("price_cardmarket_max")
-  priceCardtraderTrend Float?    @map("price_cardtrader_trend")
-  priceCardtraderMin   Float?    @map("price_cardtrader_min")
-  priceCardtraderMax   Float?    @map("price_cardtrader_max")
   pricesUpdatedAt      DateTime? @map("prices_updated_at")
   releasedAt           DateTime? @map("released_at")
   createdAt            DateTime  @default(now()) @map("created_at")
@@ -153,11 +174,11 @@ model CardPrinting {
   @@unique([setId, collectorNumber])
   @@index([catalogId])
   @@index([setId])
+  @@index([pricesUpdatedAt])
+  @@index([updatedAt])
   @@map("card_printings")
 }
 
-// Sparse time series: consumers use the most recent row at or before a date.
-// A row is inserted only for an initial value or a movement greater than 2.5%.
 model CardPriceHistory {
   id             String       @id @default(uuid())
   cardPrintingId String       @map("card_printing_id")
@@ -177,8 +198,6 @@ model CardPriceHistory {
   @@map("card_price_history")
 }
 
-// Internal scheduling state only. It is deleted after a Spanish printing is
-// found or after the third weekly retry; no untranslated flag is exposed.
 model CardTranslationRetry {
   cardPrintingId String       @id @map("card_printing_id")
   attempts       Int          @default(0)
@@ -233,6 +252,7 @@ model CardRuling {
   lastSeenAt     DateTime @default(now()) @map("last_seen_at")
 
   @@unique([oracleId, textHash])
+  @@index([oracleId, rulingDate])
   @@map("card_rulings")
 }
 
@@ -318,3 +338,89 @@ model ScryfallBulkState {
   updatedAt DateTime @default(now()) @map("updated_at")
   @@map("scryfall_bulk_state")
 }
+
+model SimulatedCollection {
+  id          String          @id @default(uuid())
+  userId      String          @map("user_id")
+  name        String
+  description String?
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @default(now()) @updatedAt @map("updated_at")
+  cards       SimulatedCard[]
+
+  @@index([userId])
+  @@map("simulated_collections")
+}
+
+model SimulatedCard {
+  id                    String              @id @default(uuid())
+  simulatedCollectionId String              @map("simulated_collection_id")
+  cardScryfallId        String?             @map("card_scryfall_id")
+  cardName              String              @map("card_name")
+  quantity              Int                 @default(1)
+  setCode               String?             @map("set_code")
+  collectorNumber       String?             @map("collector_number")
+  manaCost              String?             @map("mana_cost")
+  typeLine              String?             @map("type_line")
+  imageUri              String?             @map("image_uri")
+  price                 Float?              @map("price")
+  simulatedCollection   SimulatedCollection @relation(fields: [simulatedCollectionId], references: [id], onDelete: Cascade)
+
+  @@index([simulatedCollectionId])
+  @@map("simulated_cards")
+}
+
+model MtgjsonUuidMap {
+  uuid       String @id
+  scryfallId String @map("scryfall_id")
+
+  @@index([scryfallId])
+  @@map("mtgjson_uuid_map")
+}
+
+model CmPriceHistory {
+  scryfallId String   @map("scryfall_id")
+  finish     Int      @db.SmallInt
+  date       DateTime @db.Date
+  priceCents Int      @map("price_cents")
+
+  @@id([scryfallId, date, finish])
+  @@index([date])
+  @@map("cm_price_history")
+}
+
+model PriceAnomaly {
+  id         String   @id @default(uuid())
+  scryfallId String   @map("scryfall_id")
+  finish     Int      @db.SmallInt
+  date       DateTime @db.Date
+  priceCents Int      @map("price_cents")
+  prevCents  Int      @map("prev_cents")
+  detectedAt DateTime @default(now()) @map("detected_at")
+  resolved   Boolean  @default(false)
+
+  @@unique([scryfallId, finish, date])
+  @@map("price_anomalies")
+}
+
+model IngestRun {
+  id         Int       @id @default(autoincrement())
+  sourceUrl  String?   @map("source_url")
+  feedDate   String?   @map("feed_date")
+  status     String    // running | success | warning | failed | skipped
+  tracked    Int?
+  mapped     Int?
+  matched    Int?
+  inserted   Int?
+  invalid    Int?
+  anomalies  Int?
+  conflicts  Int?
+  notes      String?
+  error      String?
+  startedAt  DateTime  @default(now()) @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+
+  @@map("ingest_runs")
+}
+
+

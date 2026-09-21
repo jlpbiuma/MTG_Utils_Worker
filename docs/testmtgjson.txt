@@ -1,0 +1,312 @@
+import gzip
+import json
+import sqlite3
+from decimal import Decimal
+
+import pytest
+
+import mtgjson_cardmarket as m
+
+Q = "SELECT scryfall_id FROM cards"
+
+# Scryfall IDs y uuids de MTGJSON ficticios
+S1, S2, S3, S_DFC, S_UNTRACKED = "s-1", "s-2", "s-3", "s-dfc", "s-untracked"
+U1, U2, U3, U_DFC_A, U_DFC_B, U_UNTRACKED, U_UNMAPPED = "u-1", "u-2", "u-3", "u-dfc-a", "u-dfc-b", "u-x", "u-unmapped"
+
+
+def cm(retail=None, **other):
+    entry = {"paper": {"cardmarket": {"currency": "EUR", "retail": retail or {}}}}
+    entry["paper"].update(other)
+    return entry
+
+
+def write_feed(path, data, date="2026-09-19", gz=True):
+    payload = json.dumps({"meta": {"date": date, "version": "5.x"}, "data": data}).encode()
+    if gz:
+        with gzip.open(path, "wb") as f:
+            f.write(payload)
+    else:
+        path.write_bytes(payload)
+    return path
+
+
+@pytest.fixture
+def conn(tmp_path):
+    c = sqlite3.connect(tmp_path / "t.db")
+    c.execute("CREATE TABLE cards (scryfall_id TEXT)")
+    c.executemany("INSERT INTO cards VALUES (?)", [(s,) for s in (S1, S2, S3, S_DFC)])
+    m.init_db(c)
+    c.executemany(
+        "INSERT INTO mtgjson_uuid_map VALUES (?, ?)",
+        [(U1, S1), (U2, S2), (U3, S3), (U_DFC_A, S_DFC), (U_DFC_B, S_DFC), (U_UNTRACKED, S_UNTRACKED)],
+    )
+    c.commit()
+    yield c
+    c.close()
+
+
+def rows(conn):
+    return conn.execute(
+        "SELECT scryfall_id, finish, date, price_cents FROM cm_price_history ORDER BY 1, 2, 3"
+    ).fetchall()
+
+
+# ------------------------------------------------------------------ unitarios
+
+@pytest.mark.parametrize("value,expected", [
+    (12.34, 1234), (Decimal("0.05"), 5), (Decimal("2.675"), 268), (1, 100), (0.1, 10),
+    (0, None), (-1, None), (None, None), ("3.5", None), (True, None), (float("nan"), None), (float("inf"), None),
+])
+def test_price_to_cents(value, expected):
+    assert m.price_to_cents(value) == expected
+
+
+def test_valid_iso_date():
+    assert m.valid_iso_date("2026-09-19")
+    assert not m.valid_iso_date("2026-13-40")
+    assert not m.valid_iso_date(20260919)
+
+
+def test_is_anomalous():
+    assert m.is_anomalous(500, 15000)        # 5€ -> 150€
+    assert m.is_anomalous(15000, 500)        # caída brusca
+    assert not m.is_anomalous(10, 60)        # x6 pero solo 0,50€ de diferencia
+    assert not m.is_anomalous(1000, 2000)    # subida normal
+
+
+# ------------------------------------------------------------------ ingesta básica
+
+def test_only_cardmarket_retail_and_all_finishes(conn, tmp_path):
+    feed = write_feed(tmp_path / "f.json.gz", {
+        U1: {
+            "paper": {
+                "cardmarket": {"currency": "EUR",
+                               "retail": {"normal": {"2026-09-19": 1.5},
+                                          "foil": {"2026-09-19": 3.25},
+                                          "etched": {"2026-09-19": 9.99}},
+                               "buylist": {"normal": {"2026-09-19": 0.5}}},
+                "tcgplayer": {"currency": "USD", "retail": {"normal": {"2026-09-19": 99.0}}},
+                "cardkingdom": {"currency": "USD", "retail": {"normal": {"2026-09-19": 88.0}}},
+            },
+            "mtgo": {"cardhoarder": {"currency": "USD", "retail": {"normal": {"2026-09-19": 77.0}}}},
+        }
+    })
+    st = m.ingest_file(conn, feed, Q, "url")
+    assert st.status == "success"
+    assert rows(conn) == [(S1, 0, "2026-09-19", 150), (S1, 1, "2026-09-19", 325), (S1, 2, "2026-09-19", 999)]
+
+
+def test_missing_finish_creates_no_row(conn, tmp_path):
+    feed = write_feed(tmp_path / "f.json.gz", {U1: cm({"foil": {"2026-09-19": 2.0}})})
+    m.ingest_file(conn, feed, Q, "url")
+    assert rows(conn) == [(S1, 1, "2026-09-19", 200)]
+
+
+def test_ignores_untracked_and_unmapped(conn, tmp_path):
+    feed = write_feed(tmp_path / "f.json.gz", {
+        U1: cm({"normal": {"2026-09-19": 1.0}}),
+        U_UNTRACKED: cm({"normal": {"2026-09-19": 5.0}}),
+        U_UNMAPPED: cm({"normal": {"2026-09-19": 6.0}}),
+    })
+    m.ingest_file(conn, feed, Q, "url")
+    assert [r[0] for r in rows(conn)] == [S1]
+
+
+def test_uuid_without_cardmarket_is_ignored(conn, tmp_path):
+    feed = write_feed(tmp_path / "f.json.gz", {
+        U1: {"paper": {"tcgplayer": {"retail": {"normal": {"2026-09-19": 4.0}}}}},
+        U2: cm({"normal": {"2026-09-19": 2.0}}),
+    })
+    st = m.ingest_file(conn, feed, Q, "url")
+    assert [r[0] for r in rows(conn)] == [S2]
+    assert st.matched == 1
+
+
+def test_invalid_prices_and_dates_are_skipped(conn, tmp_path):
+    feed = write_feed(tmp_path / "f.json.gz", {
+        U1: cm({"normal": {"2026-09-19": None, "2026-09-18": 0, "2026-09-17": -3, "2026-09-16": "abc",
+                           "not-a-date": 1.0, "2026-09-15": 2.5}}),
+    })
+    st = m.ingest_file(conn, feed, Q, "url")
+    assert rows(conn) == [(S1, 0, "2026-09-15", 250)]
+    assert st.invalid == 5
+
+
+def test_non_gzip_file_also_works(conn, tmp_path):
+    feed = write_feed(tmp_path / "f.json", {U1: cm({"normal": {"2026-09-19": 1.0}})}, gz=False)
+    assert m.ingest_file(conn, feed, Q, "url").inserted == 1
+
+
+# ------------------------------------------------------------------ idempotencia y control de ejecuciones
+
+def test_rerun_is_idempotent_and_updates_price(conn, tmp_path):
+    f1 = write_feed(tmp_path / "a.json.gz", {U1: cm({"normal": {"2026-09-19": 1.0}})})
+    m.ingest_file(conn, f1, Q, "url")
+    f2 = write_feed(tmp_path / "b.json.gz", {U1: cm({"normal": {"2026-09-19": 1.2}})})
+    m.ingest_file(conn, f2, Q, "url", force=True)
+    assert rows(conn) == [(S1, 0, "2026-09-19", 120)]
+
+
+def test_same_feed_date_is_skipped_unless_forced(conn, tmp_path):
+    feed = write_feed(tmp_path / "f.json.gz", {U1: cm({"normal": {"2026-09-19": 1.0}})})
+    assert m.ingest_file(conn, feed, Q, "url").status == "success"
+    assert m.ingest_file(conn, feed, Q, "url").status == "skipped"
+    assert m.ingest_file(conn, feed, Q, "url", force=True).status == "success"
+    assert conn.execute("SELECT COUNT(*) FROM ingest_runs").fetchone()[0] == 2
+
+
+def test_truncated_gzip_marks_run_failed_and_recovers(conn, tmp_path):
+    good = write_feed(tmp_path / "ok.json.gz", {U1: cm({"normal": {"2026-09-19": 1.0}}),
+                                                U2: cm({"normal": {"2026-09-19": 2.0}})})
+    bad = tmp_path / "bad.json.gz"
+    bad.write_bytes(good.read_bytes()[:-15])  # descarga cortada
+    with pytest.raises(Exception):
+        m.ingest_file(conn, bad, Q, "url")
+    assert conn.execute("SELECT status FROM ingest_runs ORDER BY id DESC LIMIT 1").fetchone()[0] == "failed"
+    # un reintento con el fichero bueno funciona (el 'failed' no bloquea)
+    assert m.ingest_file(conn, good, Q, "url").status == "success"
+    assert len(rows(conn)) == 2
+
+
+def test_zero_matches_raises_format_change(conn, tmp_path):
+    feed = write_feed(tmp_path / "f.json.gz", {U1: {"paper": {"cartmarket_typo": {}}}})
+    with pytest.raises(RuntimeError):
+        m.ingest_file(conn, feed, Q, "url")
+    assert conn.execute("SELECT status FROM ingest_runs ORDER BY id DESC LIMIT 1").fetchone()[0] == "failed"
+
+
+def test_coverage_drop_sets_warning(conn, tmp_path):
+    day1 = write_feed(tmp_path / "1.json.gz", {U1: cm({"normal": {"2026-09-18": 1.0}}),
+                                               U2: cm({"normal": {"2026-09-18": 1.0}}),
+                                               U3: cm({"normal": {"2026-09-18": 1.0}})}, date="2026-09-18")
+    day2 = write_feed(tmp_path / "2.json.gz", {U1: cm({"normal": {"2026-09-19": 1.0}})}, date="2026-09-19")
+    assert m.ingest_file(conn, day1, Q, "url").status == "success"
+    assert m.ingest_file(conn, day2, Q, "url").status == "warning"
+
+
+# ------------------------------------------------------------------ DFC
+
+def test_dfc_faces_write_one_row_and_count_conflicts(conn, tmp_path):
+    feed = write_feed(tmp_path / "f.json.gz", {
+        U_DFC_A: cm({"normal": {"2026-09-19": 10.0}}),
+        U_DFC_B: cm({"normal": {"2026-09-19": 10.0}}),   # igual: sin conflicto
+        U1: cm({"normal": {"2026-09-19": 1.0}}),
+    })
+    st = m.ingest_file(conn, feed, Q, "url")
+    assert [r for r in rows(conn) if r[0] == S_DFC] == [(S_DFC, 0, "2026-09-19", 1000)]
+    assert st.conflicts == 0
+
+    feed2 = write_feed(tmp_path / "g.json.gz", {
+        U_DFC_A: cm({"normal": {"2026-09-20": 10.0}}),
+        U_DFC_B: cm({"normal": {"2026-09-20": 11.0}}),   # distinto: conflicto
+    }, date="2026-09-20")
+    st2 = m.ingest_file(conn, feed2, Q, "url")
+    assert st2.conflicts == 1
+    assert len([r for r in rows(conn) if r[0] == S_DFC and r[2] == "2026-09-20"]) == 1
+
+
+# ------------------------------------------------------------------ anomalías
+
+def test_anomaly_is_quarantined_then_confirmed_next_day(conn, tmp_path):
+    d1 = write_feed(tmp_path / "1.json.gz", {U1: cm({"normal": {"2026-09-18": 5.0}})}, date="2026-09-18")
+    d2 = write_feed(tmp_path / "2.json.gz", {U1: cm({"normal": {"2026-09-19": 150.0}})}, date="2026-09-19")
+    d3 = write_feed(tmp_path / "3.json.gz", {U1: cm({"normal": {"2026-09-20": 152.0}})}, date="2026-09-20")
+    m.ingest_file(conn, d1, Q, "url")
+
+    st = m.ingest_file(conn, d2, Q, "url")
+    assert st.anomalies == 1
+    assert rows(conn) == [(S1, 0, "2026-09-18", 500)]           # no entra al histórico
+    assert conn.execute("SELECT COUNT(*) FROM price_anomalies WHERE resolved=0").fetchone()[0] == 1
+
+    st = m.ingest_file(conn, d3, Q, "url")                       # el precio se mantiene -> confirmado
+    assert st.confirmed == 1 and st.anomalies == 0
+    assert rows(conn)[-1] == (S1, 0, "2026-09-20", 15200)
+    assert conn.execute("SELECT COUNT(*) FROM price_anomalies WHERE resolved=0").fetchone()[0] == 0
+
+
+def test_anomaly_not_confirmed_by_same_day_rerun(conn, tmp_path):
+    d1 = write_feed(tmp_path / "1.json.gz", {U1: cm({"normal": {"2026-09-18": 5.0}})}, date="2026-09-18")
+    d2 = write_feed(tmp_path / "2.json.gz", {U1: cm({"normal": {"2026-09-19": 150.0}})}, date="2026-09-19")
+    m.ingest_file(conn, d1, Q, "url")
+    m.ingest_file(conn, d2, Q, "url")
+    st = m.ingest_file(conn, d2, Q, "url", force=True)           # mismo día repetido
+    assert st.anomalies == 1 and st.confirmed == 0
+    assert rows(conn) == [(S1, 0, "2026-09-18", 500)]
+
+
+def test_one_off_spike_that_reverts_is_never_accepted(conn, tmp_path):
+    feeds = [
+        write_feed(tmp_path / "1.json.gz", {U1: cm({"normal": {"2026-09-18": 5.0}})}, date="2026-09-18"),
+        write_feed(tmp_path / "2.json.gz", {U1: cm({"normal": {"2026-09-19": 150.0}})}, date="2026-09-19"),
+        write_feed(tmp_path / "3.json.gz", {U1: cm({"normal": {"2026-09-20": 5.2}})}, date="2026-09-20"),
+    ]
+    for f in feeds:
+        m.ingest_file(conn, f, Q, "url")
+    assert [r[3] for r in rows(conn)] == [500, 520]
+
+
+def test_multi_date_series_backfill_detects_anomaly_in_sequence(conn, tmp_path):
+    feed = write_feed(tmp_path / "f.json.gz", {U1: cm({"normal": {
+        "2026-09-17": 5.0, "2026-09-18": 5.5, "2026-09-19": 400.0, "2026-09-20": 5.4}})})
+    st = m.ingest_file(conn, feed, Q, "url-90d")
+    assert st.anomalies == 1
+    assert [r[2] for r in rows(conn)] == ["2026-09-17", "2026-09-18", "2026-09-20"]
+
+
+# ------------------------------------------------------------------ mapa de IDs
+
+def test_sync_uuid_map_from_allprintings_sqlite(tmp_path):
+    src = tmp_path / "AllPrintings.sqlite"
+    s = sqlite3.connect(src)
+    s.execute("CREATE TABLE cardIdentifiers (uuid TEXT, scryfallId TEXT, mcmId TEXT)")
+    s.executemany("INSERT INTO cardIdentifiers VALUES (?,?,?)",
+                  [("u-a", "SCRY-A", "1"), ("u-b", None, "2"), ("u-c", "SCRY-C", None)])
+    s.commit(); s.close()
+
+    c = sqlite3.connect(tmp_path / "d.db")
+    m.init_db(c)
+    assert m.sync_uuid_map(c, src) == 2
+    assert dict(c.execute("SELECT uuid, scryfall_id FROM mtgjson_uuid_map")) == {"u-a": "scry-a", "u-c": "scry-c"}
+
+
+def test_sync_uuid_map_fails_clearly_if_schema_changed(tmp_path):
+    src = tmp_path / "x.sqlite"
+    sqlite3.connect(src).close()
+    c = sqlite3.connect(tmp_path / "d.db"); m.init_db(c)
+    with pytest.raises(RuntimeError):
+        m.sync_uuid_map(c, src)
+
+
+def test_tracked_ids_are_case_insensitive(tmp_path):
+    c = sqlite3.connect(tmp_path / "d.db")
+    c.execute("CREATE TABLE cards (scryfall_id TEXT)")
+    c.execute("INSERT INTO cards VALUES ('ABC-DEF')")
+    assert m.load_tracked(c, Q) == {"abc-def"}
+
+
+# ------------------------------------------------------------------ integridad y CLI
+
+def test_sha256_file(tmp_path):
+    p = tmp_path / "x"; p.write_bytes(b"hola")
+    assert m.sha256_file(p) == "b221d9dbb083a7f33428d7c2a3c3198ae925614d70210e28716ccaa7cd4ddb79"
+
+
+def test_cli_ingest_with_local_file_and_report(tmp_path, capsys):
+    db = tmp_path / "cli.db"
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE cards (scryfall_id TEXT)"); c.execute("INSERT INTO cards VALUES ('s-1')")
+    m.init_db(c)
+    c.execute("INSERT INTO mtgjson_uuid_map VALUES ('u-1','s-1')"); c.commit(); c.close()
+    feed = write_feed(tmp_path / "f.json.gz", {"u-1": cm({"normal": {"2026-09-19": 1.0}})})
+
+    assert m.main(["--db", str(db), "ingest", "--file", str(feed)]) == 0
+    assert m.main(["--db", str(db), "report"]) == 0
+    out = capsys.readouterr().out
+    assert "Cartas seguidas: 1" in out and "1 filas" in out
+
+
+def test_cli_returns_nonzero_on_failure(tmp_path):
+    db = tmp_path / "cli.db"
+    sqlite3.connect(db).close()
+    bad = tmp_path / "bad.json.gz"; bad.write_bytes(b"\x1f\x8bgarbage")
+    assert m.main(["--db", str(db), "--cards-query", "SELECT 'x'", "ingest", "--file", str(bad)]) == 1

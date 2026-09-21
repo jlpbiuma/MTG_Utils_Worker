@@ -188,9 +188,7 @@ async def test_download_set_stays_pending_when_any_art_variant_is_missing():
     update = mock_db.cardset.update.await_args.kwargs["data"]
     assert update["isDownloaded"] is False
     printing = mock_db.cardprinting.upsert.await_args.kwargs["data"]["create"]
-    assert printing["pricesUpdatedAt"] is not None
     assert printing["priceCardmarketTrend"] == 1.25
-    assert printing["priceCardtraderTrend"] == 1.23
 
 @pytest.mark.asyncio
 async def test_download_set_does_not_write_icons_locally():

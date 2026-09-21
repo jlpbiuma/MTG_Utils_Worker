@@ -1,0 +1,493 @@
+#!/usr/bin/env python3
+"""
+Ingesta de precios de Cardmarket (EUR) desde MTGJSON para cartas identificadas por Scryfall ID.
+
+Comandos:
+  sync-map   Carga la tabla uuid(MTGJSON) -> scryfall_id desde AllPrintings.sqlite
+  ingest     Descarga AllPricesToday e inserta SOLO precios retail de Cardmarket de tus cartas
+  backfill   Igual que ingest pero con AllPrices (últimos ~90 días)
+  report     Cobertura, cartas sin mapear y última ejecución
+
+Dependencias: pip install ijson requests
+Almacenamiento: SQLite (stdlib). Para otra BD basta con reescribir las funciones que usan `conn`.
+"""
+from __future__ import annotations
+
+import argparse
+import gzip
+import hashlib
+import logging
+import shutil
+import sqlite3
+import sys
+import tempfile
+from dataclasses import dataclass, field
+from datetime import date as _date
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from pathlib import Path
+
+import ijson
+import requests
+
+log = logging.getLogger("mtgjson_cm")
+
+PRICES_TODAY_URL = "https://mtgjson.com/api/v5/AllPricesToday.json.gz"
+PRICES_90D_URL = "https://mtgjson.com/api/v5/AllPrices.json.gz"
+PRINTINGS_SQLITE_URL = "https://mtgjson.com/api/v5/AllPrintings.sqlite.gz"
+USER_AGENT = "mtg-price-worker/1.0 (cambia esto por tu contacto)"
+
+FINISHES = {"normal": 0, "foil": 1, "etched": 2}
+
+# Cuarentena de anomalías: salto >= 5x (arriba o abajo) Y diferencia >= 20 EUR.
+ANOMALY_RATIO = 5
+ANOMALY_MIN_DELTA_CENTS = 2000
+# Una anomalía se confirma si al día siguiente (o después) el precio se mantiene (±10%).
+CONFIRM_TOLERANCE = Decimal("0.10")
+COVERAGE_DROP_WARN = 0.8
+BATCH_SIZE = 5000
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS mtgjson_uuid_map (
+    uuid        TEXT PRIMARY KEY,
+    scryfall_id TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_uuid_map_scryfall ON mtgjson_uuid_map(scryfall_id);
+
+-- finish: 0 = normal, 1 = foil, 2 = etched. Precio en céntimos de EUR. date = ISO YYYY-MM-DD.
+CREATE TABLE IF NOT EXISTS cm_price_history (
+    scryfall_id TEXT    NOT NULL,
+    finish      INTEGER NOT NULL,
+    date        TEXT    NOT NULL,
+    price_cents INTEGER NOT NULL,
+    PRIMARY KEY (scryfall_id, finish, date)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS price_anomalies (
+    scryfall_id TEXT    NOT NULL,
+    finish      INTEGER NOT NULL,
+    date        TEXT    NOT NULL,
+    price_cents INTEGER NOT NULL,
+    prev_cents  INTEGER NOT NULL,
+    detected_at TEXT    NOT NULL,
+    resolved    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (scryfall_id, finish, date)
+);
+
+CREATE TABLE IF NOT EXISTS ingest_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_url  TEXT,
+    feed_date   TEXT,
+    status      TEXT NOT NULL,          -- running | success | warning | failed
+    tracked     INTEGER, mapped INTEGER, matched INTEGER,
+    inserted    INTEGER, invalid INTEGER, anomalies INTEGER, conflicts INTEGER,
+    notes       TEXT, error TEXT,
+    started_at  TEXT NOT NULL, finished_at TEXT
+);
+"""
+
+
+# --------------------------------------------------------------------------- utilidades puras
+
+def price_to_cents(value) -> int | None:
+    """Convierte un precio de MTGJSON a céntimos enteros. None si no es un precio válido (>0)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        return None
+    try:
+        d = value if isinstance(value, Decimal) else Decimal(str(value))
+    except InvalidOperation:
+        return None
+    if not d.is_finite() or d <= 0:
+        return None
+    return int((d * 100).to_integral_value(rounding=ROUND_HALF_UP))
+
+
+def valid_iso_date(s) -> bool:
+    if not isinstance(s, str):
+        return False
+    try:
+        _date.fromisoformat(s)
+        return True
+    except ValueError:
+        return False
+
+
+def is_anomalous(prev_cents: int, new_cents: int) -> bool:
+    if abs(new_cents - prev_cents) < ANOMALY_MIN_DELTA_CENTS:
+        return False
+    return new_cents >= prev_cents * ANOMALY_RATIO or new_cents * ANOMALY_RATIO <= prev_cents
+
+
+def iter_cardmarket_points(entry):
+    """Rinde (finish_code, fecha, precio_crudo) del retail de Cardmarket de un uuid. Ignora todo lo demás."""
+    if not isinstance(entry, dict):
+        return
+    paper = entry.get("paper")
+    cm = paper.get("cardmarket") if isinstance(paper, dict) else None
+    retail = cm.get("retail") if isinstance(cm, dict) else None
+    if not isinstance(retail, dict):
+        return
+    for name, code in FINISHES.items():
+        series = retail.get(name)
+        if isinstance(series, dict):
+            for d, p in series.items():
+                yield code, d, p
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _open_maybe_gz(path: Path):
+    with open(path, "rb") as f:
+        magic = f.read(2)
+    return gzip.open(path, "rb") if magic == b"\x1f\x8b" else open(path, "rb")
+
+
+def read_feed_date(path: Path) -> str | None:
+    """Fecha de `meta` (viene antes que `data`, así que se lee sin recorrer el fichero entero)."""
+    with _open_maybe_gz(path) as f:
+        for meta in ijson.items(f, "meta"):
+            return meta.get("date") if isinstance(meta, dict) else None
+    return None
+
+
+# --------------------------------------------------------------------------- base de datos
+
+def init_db(conn: sqlite3.Connection) -> None:
+    conn.executescript(SCHEMA)
+    conn.commit()
+
+
+def load_tracked(conn, cards_query: str) -> set[str]:
+    return {str(r[0]).lower() for r in conn.execute(cards_query) if r[0]}
+
+
+def load_uuid_map(conn, tracked: set[str]):
+    """uuid -> scryfall_id (solo de tus cartas) y el conjunto de scryfall_id con >1 uuid (caras de DFC)."""
+    uuid_map: dict[str, str] = {}
+    count: dict[str, int] = {}
+    for uuid, sid in conn.execute("SELECT uuid, scryfall_id FROM mtgjson_uuid_map"):
+        if sid in tracked:
+            uuid_map[uuid] = sid
+            count[sid] = count.get(sid, 0) + 1
+    multi = {sid for sid, n in count.items() if n > 1}
+    return uuid_map, multi
+
+
+def load_latest(conn):
+    q = """SELECT h.scryfall_id, h.finish, h.date, h.price_cents
+           FROM cm_price_history h
+           JOIN (SELECT scryfall_id, finish, MAX(date) AS d FROM cm_price_history GROUP BY 1, 2) m
+             ON h.scryfall_id = m.scryfall_id AND h.finish = m.finish AND h.date = m.d"""
+    return {(s, f): (d, c) for s, f, d, c in conn.execute(q)}
+
+
+def load_pending(conn):
+    q = """SELECT scryfall_id, finish, date, price_cents FROM price_anomalies
+           WHERE resolved = 0 ORDER BY date"""
+    return {(s, f): (d, c) for s, f, d, c in conn.execute(q)}  # el último por clave gana
+
+
+def sync_uuid_map(conn, printings_sqlite: Path) -> int:
+    src = sqlite3.connect(f"file:{printings_sqlite}?mode=ro", uri=True)
+    try:
+        has = src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cardIdentifiers'").fetchone()
+        if not has:
+            raise RuntimeError("No existe la tabla cardIdentifiers en AllPrintings.sqlite (¿cambió el esquema?)")
+        n = 0
+        batch = []
+        for uuid, sid in src.execute("SELECT uuid, scryfallId FROM cardIdentifiers WHERE scryfallId IS NOT NULL"):
+            batch.append((uuid, sid.lower()))
+            if len(batch) >= BATCH_SIZE:
+                conn.executemany("INSERT OR REPLACE INTO mtgjson_uuid_map (uuid, scryfall_id) VALUES (?, ?)", batch)
+                n += len(batch)
+                batch.clear()
+        if batch:
+            conn.executemany("INSERT OR REPLACE INTO mtgjson_uuid_map (uuid, scryfall_id) VALUES (?, ?)", batch)
+            n += len(batch)
+        conn.commit()
+        return n
+    finally:
+        src.close()
+
+
+# --------------------------------------------------------------------------- ingesta
+
+@dataclass
+class Stats:
+    status: str = "running"
+    feed_date: str | None = None
+    tracked: int = 0
+    mapped: int = 0
+    matched: int = 0
+    inserted: int = 0
+    invalid: int = 0
+    anomalies: int = 0
+    confirmed: int = 0
+    conflicts: int = 0
+    notes: list[str] = field(default_factory=list)
+
+
+def _flush(conn, rows, anomaly_rows, resolved_keys):
+    if rows:
+        conn.executemany(
+            "INSERT INTO cm_price_history (scryfall_id, finish, date, price_cents) VALUES (?,?,?,?) "
+            "ON CONFLICT(scryfall_id, finish, date) DO UPDATE SET price_cents = excluded.price_cents",
+            rows,
+        )
+    if anomaly_rows:
+        conn.executemany(
+            "INSERT OR REPLACE INTO price_anomalies "
+            "(scryfall_id, finish, date, price_cents, prev_cents, detected_at, resolved) VALUES (?,?,?,?,?,?,0)",
+            anomaly_rows,
+        )
+    if resolved_keys:
+        conn.executemany(
+            "UPDATE price_anomalies SET resolved = 1 WHERE scryfall_id = ? AND finish = ? AND resolved = 0",
+            resolved_keys,
+        )
+    conn.commit()
+    rows.clear(); anomaly_rows.clear(); resolved_keys.clear()
+
+
+def ingest_file(conn, path: Path, cards_query: str, source_url: str = "", force: bool = False) -> Stats:
+    init_db(conn)
+    st = Stats()
+    try:
+        st.feed_date = read_feed_date(path)
+    except Exception as exc:  # fichero corrupto: se deja que la pasada principal falle y quede registrada
+        log.warning("No se pudo leer meta.date (%s); se intentará la ingesta completa.", exc)
+
+    if st.feed_date and not force:
+        done = conn.execute(
+            "SELECT 1 FROM ingest_runs WHERE feed_date = ? AND source_url = ? AND status IN ('success','warning')",
+            (st.feed_date, source_url),
+        ).fetchone()
+        if done:
+            st.status = "skipped"
+            log.info("Feed %s ya ingerido; nada que hacer (usa --force para repetir).", st.feed_date)
+            return st
+
+    prev_run = conn.execute(
+        "SELECT matched FROM ingest_runs WHERE source_url = ? AND status IN ('success','warning') "
+        "ORDER BY id DESC LIMIT 1", (source_url,)
+    ).fetchone()
+
+    run_id = conn.execute(
+        "INSERT INTO ingest_runs (source_url, feed_date, status, started_at) VALUES (?, ?, 'running', ?)",
+        (source_url, st.feed_date, _now()),
+    ).lastrowid
+    conn.commit()
+
+    try:
+        tracked = load_tracked(conn, cards_query)
+        uuid_map, multi = load_uuid_map(conn, tracked)
+        st.tracked = len(tracked)
+        st.mapped = len(set(uuid_map.values()))
+        prev = load_latest(conn)
+        pending = load_pending(conn)
+
+        rows: list = []
+        anomaly_rows: list = []
+        resolved_keys: list = []
+        matched: set[str] = set()
+        seen_multi: dict[tuple, int] = {}
+
+        with _open_maybe_gz(path) as f:
+            for uuid, entry in ijson.kvitems(f, "data"):
+                sid = uuid_map.get(uuid)
+                if sid is None:
+                    continue
+                points = sorted(iter_cardmarket_points(entry), key=lambda p: (p[0], str(p[1])))
+                for finish, d, raw in points:
+                    cents = price_to_cents(raw)
+                    if cents is None or not valid_iso_date(d):
+                        st.invalid += 1
+                        continue
+
+                    if sid in multi:  # varias caras (DFC) -> mismo scryfall_id
+                        k = (sid, finish, d)
+                        if k in seen_multi:
+                            if seen_multi[k] != cents:
+                                st.conflicts += 1
+                            continue
+                        seen_multi[k] = cents
+
+                    matched.add(sid)  # la carta tiene precio válido en el feed (aunque quede en cuarentena)
+                    key = (sid, finish)
+                    p = prev.get(key)
+                    if p and p[0] < d and is_anomalous(p[1], cents):
+                        pend = pending.get(key)
+                        confirmed = (
+                            pend is not None
+                            and pend[0] < d
+                            and abs(Decimal(cents) - Decimal(pend[1])) <= Decimal(pend[1]) * CONFIRM_TOLERANCE
+                        )
+                        if not confirmed:
+                            anomaly_rows.append((sid, finish, d, cents, p[1], _now()))
+                            pending[key] = (d, cents)
+                            st.anomalies += 1
+                            continue
+                        resolved_keys.append(key)
+                        pending.pop(key, None)
+                        st.confirmed += 1
+
+                    rows.append((sid, finish, d, cents))
+                    st.inserted += 1
+                    if p is None or d > p[0]:
+                        prev[key] = (d, cents)
+
+                if len(rows) >= BATCH_SIZE:
+                    _flush(conn, rows, anomaly_rows, resolved_keys)
+
+        _flush(conn, rows, anomaly_rows, resolved_keys)
+        st.matched = len(matched)
+
+        if st.tracked and st.mapped and st.matched == 0:
+            raise RuntimeError("Ninguna de tus cartas obtuvo precio: ¿cambió el formato del feed o falló el mapeo?")
+
+        st.status = "success"
+        if prev_run and prev_run[0] and st.matched < prev_run[0] * COVERAGE_DROP_WARN:
+            st.status = "warning"
+            st.notes.append(f"Cobertura cayó: {st.matched} vs {prev_run[0]} en la ejecución anterior")
+            log.warning(st.notes[-1])
+        if st.tracked - st.mapped:
+            st.notes.append(f"{st.tracked - st.mapped} cartas sin uuid de MTGJSON (ejecuta report)")
+    except Exception as exc:
+        conn.rollback()
+        conn.execute(
+            "UPDATE ingest_runs SET status='failed', error=?, finished_at=? WHERE id=?",
+            (f"{type(exc).__name__}: {exc}", _now(), run_id),
+        )
+        conn.commit()
+        raise
+
+    conn.execute(
+        "UPDATE ingest_runs SET status=?, tracked=?, mapped=?, matched=?, inserted=?, invalid=?, "
+        "anomalies=?, conflicts=?, notes=?, finished_at=? WHERE id=?",
+        (st.status, st.tracked, st.mapped, st.matched, st.inserted, st.invalid,
+         st.anomalies, st.conflicts, "; ".join(st.notes) or None, _now(), run_id),
+    )
+    conn.commit()
+    return st
+
+
+# --------------------------------------------------------------------------- descarga
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _expected_sha256(url: str) -> str | None:
+    try:
+        r = requests.get(url + ".sha256", timeout=30, headers={"User-Agent": USER_AGENT})
+        if r.ok:
+            token = r.text.split()[0].strip().lower()
+            if len(token) == 64 and all(c in "0123456789abcdef" for c in token):
+                return token
+    except requests.RequestException:
+        pass
+    return None
+
+
+def download(url: str, dest: Path, verify: bool = True) -> Path:
+    with requests.get(url, stream=True, timeout=(10, 300), headers={"User-Agent": USER_AGENT}) as r:
+        r.raise_for_status()
+        with open(dest, "wb") as out:
+            for chunk in r.iter_content(chunk_size=1 << 20):
+                out.write(chunk)
+    if verify:
+        expected = _expected_sha256(url)
+        if expected is None:
+            log.warning("No pude obtener %s.sha256; se omite la verificación de integridad.", url)
+        elif sha256_file(dest) != expected:
+            raise RuntimeError(f"SHA256 no coincide para {url}: descarga corrupta o incompleta")
+    return dest
+
+
+# --------------------------------------------------------------------------- CLI
+
+def report(conn, cards_query: str) -> None:
+    init_db(conn)
+    tracked = load_tracked(conn, cards_query)
+    mapped = {r[0] for r in conn.execute("SELECT DISTINCT scryfall_id FROM mtgjson_uuid_map")}
+    unmapped = sorted(tracked - mapped)
+    last = conn.execute("SELECT MAX(date), COUNT(*) FROM cm_price_history").fetchone()
+    run = conn.execute(
+        "SELECT feed_date, status, matched, inserted, anomalies, conflicts, notes, error "
+        "FROM ingest_runs ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    print(f"Cartas seguidas: {len(tracked)} | sin uuid MTGJSON: {len(unmapped)}")
+    print(f"Histórico: {last[1]} filas, última fecha {last[0]}")
+    print(f"Última ejecución: {run}")
+    pend = conn.execute("SELECT COUNT(*) FROM price_anomalies WHERE resolved = 0").fetchone()[0]
+    print(f"Anomalías pendientes de revisar: {pend}")
+    for sid in unmapped[:20]:
+        print("  sin mapear:", sid)
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--db", default="cards.db")
+    ap.add_argument("--cards-query", default="SELECT scryfall_id FROM cards",
+                    help="SQL que devuelve los scryfall_id que quieres seguir")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("sync-map")
+    s.add_argument("--printings-sqlite", help="Ruta a AllPrintings.sqlite (si no, usa --download)")
+    s.add_argument("--download", action="store_true")
+
+    for name in ("ingest", "backfill"):
+        i = sub.add_parser(name)
+        i.add_argument("--file", help="Usar un fichero local en vez de descargar")
+        i.add_argument("--url")
+        i.add_argument("--force", action="store_true")
+        i.add_argument("--no-verify", action="store_true")
+
+    sub.add_parser("report")
+    args = ap.parse_args(argv)
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s")
+
+    conn = sqlite3.connect(args.db)
+    try:
+        init_db(conn)
+        if args.cmd == "report":
+            report(conn, args.cards_query)
+            return 0
+
+        if args.cmd == "sync-map":
+            with tempfile.TemporaryDirectory() as tmp:
+                path = args.printings_sqlite
+                if args.download:
+                    gz = download(PRINTINGS_SQLITE_URL, Path(tmp) / "AllPrintings.sqlite.gz")
+                    path = Path(tmp) / "AllPrintings.sqlite"
+                    with gzip.open(gz, "rb") as fi, open(path, "wb") as fo:
+                        shutil.copyfileobj(fi, fo)
+                if not path:
+                    ap.error("indica --printings-sqlite o --download")
+                n = sync_uuid_map(conn, Path(path))
+            log.info("Mapa actualizado: %d uuids", n)
+            return 0
+
+        url = args.url or (PRICES_90D_URL if args.cmd == "backfill" else PRICES_TODAY_URL)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(args.file) if args.file else download(url, Path(tmp) / "prices.json.gz", not args.no_verify)
+            st = ingest_file(conn, path, args.cards_query, source_url=url, force=args.force)
+        log.info("Resultado: %s", st)
+        return 0
+    except Exception:
+        log.exception("La ejecución falló")
+        return 1
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

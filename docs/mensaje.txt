@@ -1,0 +1,42 @@
+Con un worker local en Python el plan se simplifica mucho. Sin Cloudflare desaparecen los límites de memoria y de CPU, D1, los cron de Workers y la Fase 0 como punto de decisión. Te dejo el módulo y sus tests, ya escritos y ejecutados.
+
+## Cambios respecto al plan anterior
+
+- **Streaming en Python:** el módulo usa `ijson` para leer `AllPricesToday` sin cargarlo entero. En un benchmark sintético (150k uuids, 50k cartas tuyas) tardó 2,6 s con memoria estable. El feed real es más grande, así que mídelo con datos reales.
+- **Mapeo Scryfall → uuid:** MTGJSON también se publica como SQLite, y su tabla `cardIdentifiers` incluye el `scryfallId`. `sync-map` la vuelca en tu base de datos. Se ejecuta una vez y cuando añadas cartas nuevas.
+- **Caras de doble cara:** en MTGJSON cada cara tiene su propio uuid, mientras que en Scryfall comparten ID. El módulo guarda una sola fila por carta y cuenta como "conflicto" los casos en que las caras traen precios distintos.
+- **Solo Cardmarket:** solo lee `paper.cardmarket.retail`, en normal, foil y etched. Ignora los demás proveedores, mtgo y buylist.
+
+## Cómo usarlo
+
+```bash
+pip install ijson requests
+python mtgjson_cardmarket.py --db tus_cartas.db --cards-query "SELECT scryfall_id FROM cards" sync-map --download
+python mtgjson_cardmarket.py --db tus_cartas.db --cards-query "..." report      # ¿cuántas cartas sin uuid?
+python mtgjson_cardmarket.py --db tus_cartas.db --cards-query "..." backfill    # ~90 días de histórico
+python mtgjson_cardmarket.py --db tus_cartas.db --cards-query "..." ingest      # diario
+```
+
+Programa `ingest` con cron, systemd o el Programador de tareas hacia las 08:00 UTC, con reintentos a las 10:00 y 12:00. El feed se refresca hacia las 06:00 UTC, y las ejecuciones repetidas se saltan solas si ese día ya está ingerido. El comando devuelve código de salida distinto de cero si falla, para que tu scheduler pueda alertarte.
+
+## Decisiones que tomé
+
+- **Cuarentena de anomalías:** si el precio sube o baja 5 veces y la diferencia supera 20 €, va a `price_anomalies` en lugar de al histórico. Si el nuevo valor se mantiene al día siguiente, se acepta. Lo hice porque hay reportes de precios de Cardmarket erróneos por encima de 100 € en cartas normales. Ajusta los umbrales cuando veas datos reales.
+- **Integridad:** verifica el SHA256 de la descarga si existe el fichero `.sha256`. Si no lo encuentra, avisa y continúa.
+- **Aborta si ninguna carta recibe precio** (posible cambio de formato) y avisa si la cobertura cae más de un 20% respecto a la ejecución anterior.
+- **Claves:** uso el `scryfall_id` como texto para no depender de tu esquema. Si tu tabla de cartas tiene un ID entero, cambiarlo ahorra espacio.
+
+## Qué está verificado y qué no
+
+Los 36 tests pasan. Cubren la conversión a céntimos, el filtrado de proveedores, los finishes ausentes, los valores inválidos, la idempotencia, los ficheros truncados, las caras dobles, las anomalías, el backfill y la CLI.
+
+No he podido probar contra MTGJSON real, así que comprueba esto tú:
+
+1. Que existen las URLs `.json.gz` y `.sha256` que uso (están en constantes al inicio del fichero).
+2. Que la tabla `cardIdentifiers` de `AllPrintings.sqlite` tiene las columnas `uuid` y `scryfallId`. Si el esquema cambió, `sync-map` falla con un mensaje claro.
+3. Que el intervalo de datos en `AllPrices` es el que esperas, diario o semanal.
+4. Que los precios coinciden: compara 15-20 cartas variadas (foil, etched, varias printings) con el JSON crudo y con Cardmarket.
+
+Los ficheros `mtgjson_cardmarket.py` y `test_mtgjson_cardmarket.py` están debajo de este mensaje.
+
+¿Qué base de datos usas hoy (SQLite, Postgres...) y cómo se llama la tabla de cartas? Con eso adapto las consultas y el esquema para que encajen sin cambios.

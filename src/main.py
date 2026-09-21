@@ -11,6 +11,7 @@ from src.config import settings
 from src.db import connect_db, disconnect_db, db
 from src.worker import Worker
 from src.price_history import PriceHistoryWorker
+from src.services.mtgjson_cardmarket import sync_today, backfill_history, sync_map_remote, get_report
 from src.services.scryfall import ScryfallClient
 from src.services.card_utils import normalize_card_name
 from src.rules import RulesWorker
@@ -47,7 +48,7 @@ async def run_worker_task():
     try:
         worker = Worker()
         sets = await worker.run()
-        prices = await PriceHistoryWorker(worker.db, ScryfallClient()).run()
+        prices = await PriceHistoryWorker(worker.db).run()
         rules = await RulesWorker(worker.db).run()
         result = {"status": "success", "timestamp": sets["timestamp"], "sets": sets, "prices": prices, "rules": rules}
         worker_state["last_run"] = result.get("timestamp")
@@ -229,6 +230,72 @@ async def enrich_card(payload: Dict[str, Any]):
         return {"status": "error", "error": str(error), "card": None}
     finally:
         await worker.close()
+
+@app.post("/prices/sync")
+async def trigger_price_sync(background_tasks: BackgroundTasks, force: bool = False):
+    """Trigger daily MTGJSON Cardmarket price synchronization."""
+    async def _do_sync():
+        try:
+            logger.info("Starting on-demand MTGJSON Cardmarket price sync (force=%s)...", force)
+            res = await sync_today(db, force=force)
+            logger.info("MTGJSON Cardmarket price sync finished: %s", res)
+        except Exception as exc:
+            logger.exception("MTGJSON price sync failed: %s", exc)
+
+    background_tasks.add_task(_do_sync)
+    return {"status": "accepted", "message": "MTGJSON Cardmarket price sync triggered in background"}
+
+@app.post("/prices/backfill")
+async def trigger_price_backfill(background_tasks: BackgroundTasks, force: bool = False):
+    """Trigger ~90-day MTGJSON Cardmarket price backfill."""
+    async def _do_backfill():
+        try:
+            logger.info("Starting on-demand MTGJSON Cardmarket price backfill (force=%s)...", force)
+            res = await backfill_history(db, force=force)
+            logger.info("MTGJSON Cardmarket price backfill finished: %s", res)
+        except Exception as exc:
+            logger.exception("MTGJSON price backfill failed: %s", exc)
+
+    background_tasks.add_task(_do_backfill)
+    return {"status": "accepted", "message": "MTGJSON Cardmarket price backfill triggered in background"}
+
+@app.post("/prices/sync-map")
+async def trigger_sync_map(background_tasks: BackgroundTasks):
+    """Trigger Scryfall ID <-> MTGJSON UUID mapping sync from AllPrintings.sqlite."""
+    async def _do_map_sync():
+        try:
+            logger.info("Starting on-demand MTGJSON UUID map sync...")
+            count = await sync_map_remote(db)
+            logger.info("MTGJSON UUID map sync finished: %s uuids mapped", count)
+        except Exception as exc:
+            logger.exception("MTGJSON UUID map sync failed: %s", exc)
+
+    background_tasks.add_task(_do_map_sync)
+    return {"status": "accepted", "message": "MTGJSON UUID map sync triggered in background"}
+
+@app.get("/prices/report")
+async def get_prices_report():
+    """Returns coverage, unmapped cards, last ingest run, and pending anomalies."""
+    try:
+        report_data = await get_report(db)
+        return {"status": "success", "report": report_data}
+    except Exception as exc:
+        logger.exception("Failed to generate price report: %s", exc)
+        return {"status": "error", "error": str(exc)}
+
+@app.get("/prices/anomalies")
+async def get_price_anomalies(limit: int = 50):
+    """List pending price anomalies quarantined by the system."""
+    try:
+        anomalies = await db.priceanomaly.find_many(
+            where={"resolved": False},
+            take=limit,
+            order={"date": "desc"},
+        )
+        return {"status": "success", "count": len(anomalies), "anomalies": anomalies}
+    except Exception as exc:
+        logger.exception("Failed to query price anomalies: %s", exc)
+        return {"status": "error", "error": str(exc)}
 
 def handle_exit_signal(sig, frame):
     logger.info(f"Received exit signal {sig}, terminating gracefully...")

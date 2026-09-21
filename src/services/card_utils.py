@@ -33,7 +33,8 @@ def normalize_card_name(name: Optional[str]) -> str:
         return ""
     cleaned = name.strip().lower()
     cleaned = re.sub(r"\s+", " ", cleaned)
-    if " // " in cleaned:
+    if "/" in cleaned:
+        cleaned = re.sub(r"\s*/+\s*", " // ", cleaned)
         cleaned = cleaned.split(" // ")[0]
     return cleaned
 
