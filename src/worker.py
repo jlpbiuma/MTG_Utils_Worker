@@ -193,10 +193,8 @@ class Worker:
         fetch_limit = limit or settings.SETS_PER_CYCLE
         where_clause: Dict[str, Any] = {"isDownloaded": False}
 
-        if not settings.DOWNLOAD_DIGITAL_SETS:
-            where_clause["isDigital"] = False
-
-        where_clause["setType"] = {"not_in": ["memorabilia", "token"]}
+        where_clause["isDigital"] = False
+        where_clause["setType"] = {"not_in": ["memorabilia", "token", "alchemy"]}
         where_clause["releasedAt"] = {"lte": datetime.now(timezone.utc)}
         pending_sets = await self.db.cardset.find_many(
             where=where_clause,
@@ -621,7 +619,11 @@ class Worker:
                 # A set may not yet have been catalogued during the very first
                 # bootstrap. The catalogue row is still useful immediately.
                 card_set = await self.db.cardset.find_unique(where={"code": code}) if code else None
-                if card_set:
+                from src.services.card_utils import is_arena_or_digital_set_code
+                is_digital_set = (getattr(card_set, "isDigital", False) is True) or is_arena_or_digital_set_code(code)
+                is_alchemy_set = getattr(card_set, "setType", None) == "alchemy"
+                is_a_num = str(card.get("collector_number") or "").startswith(("A-", "a-"))
+                if card_set and not is_digital_set and not is_alchemy_set and not is_a_num:
                     prices = card.get("prices") or {}
                     current_prices = PrintingPrices.from_scryfall(card)
                     price_data = {

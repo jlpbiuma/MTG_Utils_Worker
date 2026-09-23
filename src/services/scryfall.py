@@ -147,7 +147,7 @@ class ScryfallClient:
         from src.services.card_utils import is_playable_card
 
         clean_name = name.strip()
-        if not clean_name:
+        if not clean_name or clean_name.startswith(("A-", "a-")):
             return []
 
         async def _query_search(query_str: str) -> List[Dict[str, Any]]:
@@ -175,20 +175,20 @@ class ScryfallClient:
                     await asyncio.sleep(self.rate_limit_delay)
             return results
 
-        # 1. Primary search: exact name with art series and memorabilia excluded
-        base_query = f'!"{clean_name}" -layout:art_series -set_type:memorabilia'
+        # 1. Primary search: exact name with paper-only, non-digital, non-alchemy filters
+        base_query = f'!"{clean_name}" game:paper -is:digital -set_type:alchemy -layout:art_series -set_type:memorabilia'
         cards = await _query_search(base_query)
 
         # 2. If no prints found, the name might be in Spanish (e.g. "Kimahri, guardián valiente")
         #    or a localized printed name. Try with lang:any to find the canonical English card.
         if not cards:
-            lang_query = f'lang:any !"{clean_name}" -layout:art_series -set_type:memorabilia'
+            lang_query = f'lang:any !"{clean_name}" game:paper -is:digital -set_type:alchemy -layout:art_series -set_type:memorabilia'
             localized_cards = await _query_search(lang_query)
             if localized_cards:
                 canonical_name = localized_cards[0].get("name")
                 if canonical_name and canonical_name.lower() != clean_name.lower():
                     # Now fetch all playable printings of the canonical name
-                    cards = await _query_search(f'!"{canonical_name}" -layout:art_series -set_type:memorabilia')
+                    cards = await _query_search(f'!"{canonical_name}" game:paper -is:digital -set_type:alchemy -layout:art_series -set_type:memorabilia')
                 if not cards:
                     cards = localized_cards
 
@@ -202,13 +202,13 @@ class ScryfallClient:
                     named_data = named_res.json()
                     canonical_name = named_data.get("name")
                     if canonical_name and canonical_name.lower() != clean_name.lower():
-                        cards = await _query_search(f'!"{canonical_name}" -layout:art_series -set_type:memorabilia')
+                        cards = await _query_search(f'!"{canonical_name}" game:paper -is:digital -set_type:alchemy -layout:art_series -set_type:memorabilia')
                     elif is_playable_card(named_data):
                         cards = [named_data]
             except Exception as e:
                 logger.warning("Fuzzy fallback named resolution failed for %s: %s", clean_name, e)
 
-        # 4. Strict safeguard: filter out ANY card that is an art card or memorabilia
+        # 4. Strict safeguard: filter out ANY card that is not a playable paper card
         return [c for c in cards if is_playable_card(c)]
 
 

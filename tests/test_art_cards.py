@@ -172,19 +172,19 @@ async def test_fetch_printings_by_name_spanish_resolution():
         # First call with exact English fails
         mock.get(
             "/cards/search",
-            params={"q": '!"Kimahri, guardián valiente" -layout:art_series -set_type:memorabilia', "unique": "prints", "order": "released", "dir": "asc", "include_extras": "false"}
+            params={"q": '!"Kimahri, guardián valiente" game:paper -is:digital -set_type:alchemy -layout:art_series -set_type:memorabilia', "unique": "prints", "order": "released", "dir": "asc", "include_extras": "false"}
         ).respond(status_code=404)
 
         # Second call with lang:any finds the localized card
         mock.get(
             "/cards/search",
-            params={"q": 'lang:any !"Kimahri, guardián valiente" -layout:art_series -set_type:memorabilia', "unique": "prints", "order": "released", "dir": "asc", "include_extras": "false"}
+            params={"q": 'lang:any !"Kimahri, guardián valiente" game:paper -is:digital -set_type:alchemy -layout:art_series -set_type:memorabilia', "unique": "prints", "order": "released", "dir": "asc", "include_extras": "false"}
         ).respond(status_code=200, json=canonical_payload)
 
         # Third call fetches printings for canonical name
         mock.get(
             "/cards/search",
-            params={"q": '!"Kimahri, Valiant Guardian" -layout:art_series -set_type:memorabilia', "unique": "prints", "order": "released", "dir": "asc", "include_extras": "false"}
+            params={"q": '!"Kimahri, Valiant Guardian" game:paper -is:digital -set_type:alchemy -layout:art_series -set_type:memorabilia', "unique": "prints", "order": "released", "dir": "asc", "include_extras": "false"}
         ).respond(status_code=200, json=canonical_payload)
 
         cards = await client.fetch_printings_by_name("Kimahri, guardián valiente")
