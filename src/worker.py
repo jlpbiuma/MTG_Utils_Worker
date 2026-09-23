@@ -770,6 +770,17 @@ class Worker:
         image_backfill = await self.backfill_scryfall_images()
         spanish_retries = await self.retry_spanish_translations()
 
+        # Discover new candidate commanders if new sets were registered or downloaded
+        if sets_meta.get("new_sets_added", 0) > 0 or len(processed_details) > 0:
+            try:
+                from src.services.edhrec_worker import EdhrecWorker
+                ew = EdhrecWorker(self.db)
+                await ew.discover_candidate_commanders()
+                if sets_meta.get("new_sets_added", 0) > 0:
+                    await ew.sync_top_100_commanders()
+            except Exception as e:
+                logger.warning("Could not check new commanders for EDHREC: %s", e)
+
         # Count total remaining pending
         total_remaining = await self.db.cardset.count(where={"isDownloaded": False})
 

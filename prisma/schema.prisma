@@ -423,4 +423,37 @@ model IngestRun {
   @@map("ingest_runs")
 }
 
+model EdhrecCommander {
+  id                 String    @id
+  name               String    @unique
+  normalizedName     String    @unique @map("normalized_name")
+  slug               String    @unique
+  colorIdentity      String    @default("") @map("color_identity")
+  rank               Int?
+  isTop100           Boolean   @default(false) @map("is_top_100")
+  numDecks           Int       @default(0) @map("num_decks")
+  creatureCount      Int       @default(0) @map("creature_count")
+  instantCount       Int       @default(0) @map("instant_count")
+  sorceryCount       Int       @default(0) @map("sorcery_count")
+  artifactCount      Int       @default(0) @map("artifact_count")
+  enchantmentCount   Int       @default(0) @map("enchantment_count")
+  battleCount        Int       @default(0) @map("battle_count")
+  planeswalkerCount  Int       @default(0) @map("planeswalker_count")
+  landCount          Int       @default(0) @map("land_count")
+  basicLandCount     Int       @default(0) @map("basic_land_count")
+  nonbasicLandCount  Int       @default(0) @map("nonbasic_land_count")
+  cardsJson          Json?     @map("cards_json")
+  canonicalCardNames Json?     @map("canonical_card_names")
+  status             String    @default("pending")
+  lastError          String?   @map("last_error")
+  syncedAt           DateTime? @map("synced_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  @@index([isTop100])
+  @@index([status])
+  @@index([syncedAt])
+  @@map("edhrec_commanders")
+}
+
 

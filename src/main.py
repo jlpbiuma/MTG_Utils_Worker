@@ -34,6 +34,7 @@ worker_state: Dict[str, Any] = {
 _periodic_task: Optional[asyncio.Task] = None
 _queue_task: Optional[asyncio.Task] = None
 _bulk_task: Optional[asyncio.Task] = None
+_edhrec_task: Optional[asyncio.Task] = None
 _shutdown_event = asyncio.Event()
 _priority_tasks: Set[asyncio.Task] = set()
 
@@ -90,7 +91,7 @@ async def periodic_scheduler():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _periodic_task, _queue_task, _bulk_task
+    global _periodic_task, _queue_task, _bulk_task, _edhrec_task
     logger.info("Initializing MTG worker service...")
     try:
         await connect_db()
@@ -101,8 +102,10 @@ async def lifespan(app: FastAPI):
     _periodic_task = asyncio.create_task(periodic_scheduler())
     from src.priority_queue import supervisor
     from src.services.bulk_catalog import bulk_scheduler
+    from src.services.edhrec_worker import edhrec_scheduler
     _queue_task = asyncio.create_task(supervisor(db))
     _bulk_task = asyncio.create_task(bulk_scheduler(db))
+    _edhrec_task = asyncio.create_task(edhrec_scheduler(db))
     yield
 
     # Shutdown
@@ -115,10 +118,10 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
-    for task in (_queue_task, _bulk_task):
+    for task in (_queue_task, _bulk_task, _edhrec_task):
         if task:
             task.cancel()
-    await asyncio.gather(*[t for t in (_queue_task,_bulk_task) if t], return_exceptions=True)
+    await asyncio.gather(*[t for t in (_queue_task, _bulk_task, _edhrec_task) if t], return_exceptions=True)
     await disconnect_db()
     logger.info("MTG worker stopped cleanly.")
 
@@ -296,6 +299,40 @@ async def get_price_anomalies(limit: int = 50):
     except Exception as exc:
         logger.exception("Failed to query price anomalies: %s", exc)
         return {"status": "error", "error": str(exc)}
+
+@app.get("/edhrec/status")
+async def edhrec_status():
+    """Status of EDHREC commanders sync."""
+    try:
+        total = await db.edhreccommander.count()
+        top100 = await db.edhreccommander.count(where={"isTop100": True})
+        synced = await db.edhreccommander.count(where={"status": "synced"})
+        pending = await db.edhreccommander.count(where={"status": "pending"})
+        not_found = await db.edhreccommander.count(where={"status": "not_found"})
+        errors = await db.edhreccommander.count(where={"status": "error"})
+        return {
+            "status": "success",
+            "total": total,
+            "top100": top100,
+            "synced": synced,
+            "pending": pending,
+            "not_found": not_found,
+            "errors": errors,
+            "rate_limit_seconds": 30.0,
+        }
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+@app.post("/edhrec/trigger")
+async def trigger_edhrec_discovery(background_tasks: BackgroundTasks):
+    """Trigger background check for new commanders and Top 100 update."""
+    from src.services.edhrec_worker import EdhrecWorker
+    async def _run():
+        w = EdhrecWorker(db)
+        await w.sync_top_100_commanders()
+        await w.discover_candidate_commanders()
+    background_tasks.add_task(_run)
+    return {"status": "accepted", "message": "EDHREC discovery triggered in background"}
 
 def handle_exit_signal(sig, frame):
     logger.info(f"Received exit signal {sig}, terminating gracefully...")
