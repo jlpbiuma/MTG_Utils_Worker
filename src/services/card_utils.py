@@ -186,3 +186,44 @@ def is_playable_card(card: Optional[Dict[str, Any]]) -> bool:
         return False
     return True
 
+
+def is_non_playable_set(set_code: Optional[str], set_type: Optional[str], is_digital: bool = False) -> bool:
+    """True for art-series, memorabilia, token, Arena, Alchemy, or digital sets."""
+    if is_digital:
+        return True
+    st = (set_type or "").strip().lower()
+    if st in ("alchemy", "memorabilia", "token"):
+        return True
+    code = (set_code or "").strip().lower()
+    if len(code) == 4 and code.startswith("a"):
+        return True
+    if is_arena_or_digital_set_code(code):
+        return True
+    return False
+
+
+def is_non_playable_catalog_fields(
+    name: Optional[str] = None,
+    type_line: Optional[str] = None,
+    set_code: Optional[str] = None,
+    collector_number: Optional[str] = None,
+) -> bool:
+    """True when catalog-like fields describe art, tokens, or digital/Alchemy cards."""
+    n = (name or "").strip()
+    if n.startswith(("A-", "a-")):
+        return True
+    cn = str(collector_number or "").strip()
+    if cn.startswith(("A-", "a-")):
+        return True
+    tl = (type_line or "").strip().lower()
+    if tl in NON_PLAYABLE_TYPES or tl.startswith("card // card"):
+        return True
+    if "token" in tl or "emblem" in tl:
+        return True
+    code = (set_code or "").strip().lower()
+    if len(code) == 4 and code.startswith("a"):
+        return True
+    if is_arena_or_digital_set_code(code):
+        return True
+    return False
+
